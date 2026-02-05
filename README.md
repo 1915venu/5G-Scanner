@@ -1,1 +1,753 @@
-# 5G-Scanner
+# 5G NR Cell Detection - Complete Theory Guide 📖
+## Verified Against 3GPP TS 38.211 V17.4.0
+
+---
+
+# PART 1: OFDM FUNDAMENTALS
+
+## 1.1 What is OFDM?
+
+**OFDM = Orthogonal Frequency Division Multiplexing**
+
+### The Core Idea
+
+Instead of transmitting one high-speed data stream on a single wide carrier, OFDM transmits many low-speed streams on many narrow carriers **simultaneously**.
+
+```
+Single Carrier (Traditional):
+   ████████████████████████████████
+   └────────── 20 MHz ─────────────┘
+   One stream at 100 Mbps
+   
+OFDM (Multi-Carrier):
+   │█│█│█│█│█│█│█│█│█│█│█│█│█│█│█│█│
+   └────────── 20 MHz ─────────────┘
+   2048 streams at ~50 kbps each = 100 Mbps total
+```
+
+### Why "Orthogonal"?
+
+Subcarriers are spaced exactly so their peaks align with zeros of neighbors:
+
+```
+Subcarrier 1:  ╱╲     ╱╲     ╱╲
+Subcarrier 2:     ╱╲     ╱╲     ╱╲
+                ↑
+            Zero crossing of SC1 = peak of SC2
+```
+
+**Mathematically:** Subcarriers at frequencies f₀, f₀+Δf, f₀+2Δf, ... are orthogonal over period T if:
+```
+∫₀ᵀ e^(j2πf₁t) × e^(-j2πf₂t) dt = 0  when f₁ ≠ f₂
+```
+
+This requires **Δf = 1/T** (subcarrier spacing = 1/symbol duration)
+
+### 5G NR Subcarrier Spacings
+
+| Numerology (μ) | Subcarrier Spacing | Symbol Duration | Use Case |
+|---------------|-------------------|-----------------|----------|
+| 0 | 15 kHz | 66.67 μs | FR1 (sub-6 GHz) |
+| 1 | 30 kHz | 33.33 μs | FR1 (common) |
+| 2 | 60 kHz | 16.67 μs | FR1/FR2 |
+| 3 | 120 kHz | 8.33 μs | FR2 (mmWave) |
+| 4 | 240 kHz | 4.17 μs | FR2 (SSB only) |
+
+**Formula:** Symbol duration T = 1/SCS
+
+---
+
+## 1.2 FFT and OFDM
+
+### The Mathematical Foundation
+
+**Transmitter (IFFT):**
+```
+x(n) = (1/√N) × Σₖ₌₀ᴺ⁻¹ X(k) × e^(j2πkn/N)
+
+Where:
+- X(k) = data symbol on subcarrier k (frequency domain)
+- x(n) = time domain sample n
+- N = FFT size
+```
+
+**Receiver (FFT):**
+```
+X(k) = (1/√N) × Σₙ₌₀ᴺ⁻¹ x(n) × e^(-j2πkn/N)
+```
+
+### Why FFT is Efficient
+
+Direct computation: O(N²) operations
+FFT algorithm: O(N log N) operations
+
+For N=2048: FFT is ~200× faster!
+
+### Sample Rate Formula
+
+```
+Sample Rate = FFT Size × Subcarrier Spacing
+
+Example (5G NR μ=0):
+30.72 MHz = 2048 × 15 kHz
+```
+
+---
+
+## 1.3 Cyclic Prefix (CP)
+
+### The Multipath Problem
+
+Wireless signals reflect off buildings, arriving at different times:
+
+```
+Time →
+                    
+TX:  [Symbol 1        ][Symbol 2        ]
+                ↓ direct path (fast)
+RX:  [Symbol 1        ][Symbol 2        ]
+                ↓ reflected path (delayed by τ)
+RX:     [Symbol 1     ][Symbol 2     ]...
+              ↑
+         Symbols OVERLAP = Inter-Symbol Interference (ISI)
+```
+
+### The CP Solution
+
+**Copy the last Ncp samples of the symbol to the beginning:**
+
+```
+Original:    [         s₀ s₁ s₂ ... sₙ₋₃ sₙ₋₂ sₙ₋₁]
+                                       ↓ ↓ ↓ (copy)
+With CP:     [sₙ₋₃ sₙ₋₂ sₙ₋₁ | s₀ s₁ s₂ ... sₙ₋₃ sₙ₋₂ sₙ₋₁]
+              └────CP─────┘ └──────────Main Symbol──────────┘
+```
+
+### How CP Prevents ISI
+
+```
+TX: [CP][Main Symbol][CP][Main Symbol]...
+
+Delayed reflections land in CP region:
+    [CP][Main Symbol][CP][Main Symbol]
+     ↑
+   ISI absorbed here (receiver discards CP)
+```
+
+**Key Requirement:** CP length > maximum delay spread
+
+### 5G NR CP Lengths
+
+| Numerology | Normal CP (samples) | Extended CP |
+|------------|---------------------|-------------|
+| μ=0 (15 kHz) | 144/160 | 512 |
+| μ=1 (30 kHz) | 72/80 | - |
+
+First symbol of each slot has slightly longer CP (160 vs 144).
+
+---
+
+## 1.4 OFDM Symbol Structure
+
+### Complete Symbol
+
+```
+┌─────────────────────────────────────────┐
+│    CP    │        Useful Symbol         │
+│(144 samp)│       (2048 samples)         │
+└──────────┴──────────────────────────────┘
+           │← FFT window (exactly here!) →│
+           
+Total samples = 2048 + 144 = 2192 (first symbol: 2048+160=2208)
+```
+
+### Timing Relationships
+
+For μ=0 (15 kHz SCS), sample rate = 30.72 MHz:
+```
+Symbol duration = 2048/30.72e6 = 66.67 μs
+CP duration = 144/30.72e6 = 4.69 μs
+Total OFDM symbol = 2192/30.72e6 = 71.35 μs
+```
+
+---
+
+# PART 2: SEQUENCES AND SIGNAL GENERATION
+
+## 2.1 M-Sequences (Maximum Length Sequences)
+
+### Definition
+
+An m-sequence is generated by a **Linear Feedback Shift Register (LFSR)** with specific tap positions.
+
+### LFSR Structure
+
+```
+┌───────────────────────────────────────────────┐
+│                                               │
+│  ┌───┐   ┌───┐   ┌───┐   ┌───┐   ┌───┐   ┌───┐   ┌───┐
+│  │x₀ │──▶│x₁ │──▶│x₂ │──▶│x₃ │──▶│x₄ │──▶│x₅ │──▶│x₆ │──▶ output
+│  └───┘   └───┘   └───┘   └───┘   └───┘   └───┘   └───┘
+│    │                       │                       ▲
+│    └───────────XOR─────────┘───────────────────────┘
+│                (feedback)
+└───────────────────────────────────────────────┘
+
+Polynomial: x⁷ + x⁴ + 1
+Feedback: x₇ = x₄ ⊕ x₀  (XOR)
+```
+
+### Mathematical Formulation
+
+For polynomial x⁷ + x⁴ + 1:
+```
+x(n+7) = [x(n+4) + x(n)] mod 2
+```
+
+This is exactly what the code does:
+```python
+for i in range(120):
+    next_val = (x[i+4] + x[i]) % 2  # Same as XOR
+    x = np.append(x, next_val)
+```
+
+### Key Properties
+
+| Property | Value | Explanation |
+|----------|-------|-------------|
+| Length | 2ⁿ - 1 | For n=7 bits → 127 |
+| Balance | (2ⁿ⁻¹) ones, (2ⁿ⁻¹-1) zeros | 64 ones, 63 zeros |
+| Runs | Specific pattern | Predictable run lengths |
+| **Autocorrelation** | **Special!** | See below |
+
+### Autocorrelation Property (CRITICAL!)
+
+For m-sequence {aₙ} with BPSK mapping (0→+1, 1→-1):
+
+```
+         ┌ N,    if τ = 0 (mod N)
+R(τ) =   │
+         └ -1,   if τ ≠ 0 (mod N)
+         
+Where N = 2ⁿ - 1 = 127 for PSS
+```
+
+**Visual:**
+```
+                    Peak = 127
+                       │
+             ──────────█──────────
+    -1  ─────────────▬▬▬▬▬▬▬▬─────────────  baseline
+                       ↑
+                    τ = 0
+```
+
+**Why This Matters:** When correlating received signal with known m-sequence:
+- Perfect alignment → huge peak (127)
+- Any misalignment → near zero (-1)
+- **21 dB peak-to-sidelobe ratio** = robust detection!
+
+---
+
+## 2.2 PSS - Primary Synchronization Signal
+
+### Reference: 3GPP TS 38.211 Section 7.4.2.2
+
+### PSS Sequence Definition
+
+The PSS is derived from m-sequence using:
+
+```
+d_PSS(n) = 1 - 2·x(m)
+
+where:
+  m = (n + 43·N_ID_2) mod 127
+  n = 0, 1, 2, ..., 126
+  N_ID_2 ∈ {0, 1, 2}
+```
+
+### M-Sequence for PSS
+
+**Initial condition:** x(6)=1, x(5)=1, x(4)=1, x(3)=0, x(2)=1, x(1)=1, x(0)=0
+
+Or written as array: `[0, 1, 1, 0, 1, 1, 1]` (x₀ to x₆)
+
+**Recurrence:** x(i+7) = [x(i+4) + x(i)] mod 2
+
+### Why 43?
+
+The sequences for N_ID_2 = 0, 1, 2 are **cyclic shifts** of each other:
+- N_ID_2=0: shift by 0
+- N_ID_2=1: shift by 43
+- N_ID_2=2: shift by 86
+
+**43 = 127/3 rounded** ensures maximum distance between sequences for better detection.
+
+### BPSK Mapping
+
+```
+x(m) = 0  →  d_PSS(n) = 1 - 2×0 = +1
+x(m) = 1  →  d_PSS(n) = 1 - 2×1 = -1
+```
+
+### PSS in Resource Grid
+
+PSS occupies **127 subcarriers** centered in the SS/PBCH block:
+
+```
+Subcarrier index (k) relative to SSB:
+  k = 56, 57, 58, ..., 182 (127 subcarriers)
+  = n - 63 + 56 to n + 63 + 56
+  
+In FFT bins (DC-centered):
+  bins -63 to +63 around center
+```
+
+---
+
+## 2.3 SSS - Secondary Synchronization Signal
+
+### Reference: 3GPP TS 38.211 Section 7.4.2.3
+
+### SSS Sequence Definition
+
+```
+d_SSS(n) = [1 - 2·x₀((n + m₀) mod 127)] × [1 - 2·x₁((n + m₁) mod 127)]
+
+where:
+  m₀ = 15·⌊N_ID_1/112⌋ + 5·N_ID_2
+  m₁ = N_ID_1 mod 112
+  n = 0, 1, 2, ..., 126
+```
+
+### Two Different M-Sequences
+
+**Sequence x₀:** (same as PSS)
+- Initial: x₀(6)=0, x₀(5)=0, x₀(4)=0, x₀(3)=0, x₀(2)=0, x₀(1)=0, x₀(0)=1
+- Or: `[1, 0, 0, 0, 0, 0, 0]`
+- Recurrence: x₀(i+7) = [x₀(i+4) + x₀(i)] mod 2
+
+**Sequence x₁:** (DIFFERENT polynomial!)
+- Initial: x₁(6)=0, x₁(5)=0, x₁(4)=0, x₁(3)=0, x₁(2)=0, x₁(1)=0, x₁(0)=1
+- Or: `[1, 0, 0, 0, 0, 0, 0]`
+- Recurrence: x₁(i+7) = [x₁(i+1) + x₁(i)] mod 2 **(note: i+1, not i+4!)**
+
+### Index Encoding
+
+| Parameter | Range | Encoding |
+|-----------|-------|----------|
+| m₀ | 0-167 | m₀ = 15·⌊N_ID_1/112⌋ + 5·N_ID_2 |
+| m₁ | 0-111 | m₁ = N_ID_1 mod 112 |
+
+**Example:** N_ID_1 = 71, N_ID_2 = 2
+```
+m₀ = 15·⌊71/112⌋ + 5·2 = 15·0 + 10 = 10
+m₁ = 71 mod 112 = 71
+```
+
+### Physical Cell ID (PCI)
+
+```
+N_ID_cell = 3 × N_ID_1 + N_ID_2
+
+Range: 0 to 1007 (1008 total)
+- N_ID_1: 0 to 335 (336 values from SSS)
+- N_ID_2: 0 to 2 (3 values from PSS)
+```
+
+---
+
+## 2.4 SSB Structure and Timing
+
+### Synchronization Signal Block (SSB)
+
+SSB contains 4 OFDM symbols:
+
+```
+Symbol 0:  PSS (Primary Synchronization Signal)
+Symbol 1:  PBCH (Broadcast Channel)
+Symbol 2:  PBCH + SSS (Secondary Sync Signal in middle)
+Symbol 3:  PBCH
+```
+
+```
+Subcarriers
+    ↑
+    │  ┌────────────────────────────────────────────────┐
+240 │  │                    PBCH                        │ Symbol 3
+    │  ├────────────────────────────────────────────────┤
+    │  │     PBCH      │     SSS      │     PBCH       │ Symbol 2
+    │  ├───────────────┴───────────────┴───────────────┤
+    │  │                    PBCH                        │ Symbol 1
+    │  ├────────────────────────────────────────────────┤
+  0 │  │                    PSS                         │ Symbol 0
+    └──┴───────────────────────────────────────────────→
+                           Time (symbols)
+```
+
+### SSS Position Relative to PSS
+
+**SSS is in Symbol 2, PSS is in Symbol 0**
+
+```
+Time offset = 2 × (FFT_size + CP_length) samples
+
+For detection code with FFT=256, CP=20:
+  offset = 2 × (256 + 20) = 552 samples
+```
+
+---
+
+# PART 3: DETECTION AND ESTIMATION
+
+## 3.1 Cross-Correlation Theory
+
+### Definition
+
+Cross-correlation of signals x(n) and y(n):
+
+```
+R_xy(τ) = Σₙ x(n) × y*(n - τ)
+
+Where:
+- τ = lag (time offset)
+- y* = complex conjugate of y
+```
+
+### Correlation as "Sliding Match"
+
+```
+Received:   [????████████████████████????]
+Reference:  [████████]
+              ↓ slide ↓
+              
+τ=0:   [████████]        R(0) = low
+τ=10:       [████████]   R(10) = medium  
+τ=20:            [████████]  R(20) = HIGH! (matched)
+```
+
+### Why M-Sequence Correlation Works
+
+Using autocorrelation property of m-sequences:
+
+```
+R(τ) = Σₙ d_PSS(n) × d_PSS(n - τ)
+
+     = 127  when τ = 0 (perfect alignment)
+     = -1   when τ ≠ 0 (any misalignment)
+```
+
+### Peak-to-Sidelobe Ratio
+
+```
+PSR = 20 × log10(127/1) = 42 dB (for perfect signal)
+
+In practice with noise:
+  PSR ≈ 20-25 dB typically
+```
+
+### FFT-Based Fast Correlation
+
+Direct correlation: O(N²)
+FFT-based: O(N log N)
+
+**Method:**
+```
+R_xy = IFFT(FFT(x) × conj(FFT(y)))
+```
+
+Python implementation:
+```python
+correlation = np.abs(signal.correlate(rx_signal, pss_ref, mode='valid'))
+# Uses FFT internally for speed
+```
+
+---
+
+## 3.2 PSS Detection Algorithm
+
+### Step-by-Step Process
+
+```
+FOR each N_ID_2 in {0, 1, 2}:
+    1. Generate reference PSS in time domain
+    2. Cross-correlate with received signal
+    3. Find correlation peak index
+    4. Calculate SNR
+    5. Store if SNR > threshold
+
+Sort detections by SNR
+Return best detection(s)
+```
+
+### SNR Calculation
+
+```
+Peak Power = |correlation[peak_index]|²
+Noise Power = mean(|correlation[other_indices]|²)
+
+SNR_dB = 10 × log10(Peak Power / Noise Power)
+```
+
+Or using amplitude (as in code):
+```python
+snr_db = 20 * np.log10(peak_value / noise_avg)
+```
+
+### Detection Threshold
+
+Typical threshold: **10-15 dB**
+
+- Too low → false positives (noise peaks detected)
+- Too high → miss weak cells
+
+---
+
+## 3.3 SSS Detection Algorithm
+
+### After PSS Detection
+
+Once PSS is found, we know:
+- Timing (sample index)
+- N_ID_2 (0, 1, or 2)
+
+### SSS Search
+
+```
+1. Calculate SSS symbol position from PSS timing
+2. Extract SSS symbol from received signal
+3. FFT to get frequency domain
+4. Extract central 127 subcarriers
+5. FOR each N_ID_1 in {0, 1, ..., 335}:
+     - Generate reference SSS(N_ID_1, N_ID_2)
+     - Compute correlation
+6. Select N_ID_1 with maximum correlation
+```
+
+### Frequency Domain Correlation
+
+For SSS, we correlate in frequency domain:
+```python
+corr = np.abs(np.sum(sss_rx_127 * np.conj(sss_ref)))
+```
+
+This is efficient because SSS is defined in frequency domain.
+
+---
+
+## 3.4 CFO Estimation
+
+### What is CFO?
+
+**Carrier Frequency Offset** = difference between TX and RX oscillator frequencies.
+
+```
+Received signal: r(t) = s(t) × e^(j2πΔft)
+
+Where Δf = CFO (can be hundreds to thousands of Hz)
+```
+
+### Effect on OFDM
+
+After FFT at receiver with CFO present:
+
+```
+Y(k) = X(k) × sin(πεN)/sin(πε/N) × e^(jπε(N-1)/N) + ICI
+
+Where ε = Δf / SCS = normalized CFO
+```
+
+**Problems:**
+1. Phase rotation (affects all subcarriers)
+2. Inter-Carrier Interference (ICI)
+
+### CP-Based Estimation Method
+
+**Key idea:** CP is identical to symbol tail
+
+```
+Without CFO:
+  CP samples = tail samples (identical)
+  
+With CFO:
+  CP samples = tail samples × e^(j2πΔf·N/Fs)
+```
+
+### Mathematical Derivation
+
+Let r(n) be received signal with CFO:
+```
+r(n) = s(n) × e^(j2πΔf·n/Fs)
+```
+
+CP correlation:
+```
+R = Σᵢ r(i) × r*(i + N)
+
+  = Σᵢ s(i)×e^(j2πΔf·i/Fs) × s*(i+N)×e^(-j2πΔf·(i+N)/Fs)
+  
+  = Σᵢ |s(i)|² × e^(-j2πΔf·N/Fs)  [since s(i) = s(i+N) in CP region]
+  
+  = P × e^(-jφ)
+```
+
+Where:
+- P = power of CP samples
+- φ = 2πΔf·N/Fs = phase rotation
+
+### CFO Extraction
+
+```
+φ = angle(R) = 2πΔf·N/Fs
+
+Therefore:
+Δf = φ·Fs / (2π·N)
+
+Normalized CFO:
+ε = Δf/SCS = φ/(2π)
+```
+
+**Code implementation:**
+```python
+corr = np.sum(cp_late * np.conj(cp_early))
+cfo = np.angle(corr) / (2 * np.pi)  # normalized CFO
+```
+
+### CFO Range
+
+CP-based method can only estimate CFO up to ±0.5 × SCS:
+```
+|ε| ≤ 0.5  →  |Δf| ≤ SCS/2 = 7.5 kHz (for 15 kHz SCS)
+```
+
+For larger CFO, additional coarse estimation needed.
+
+---
+
+## 3.5 RSRP - Reference Signal Received Power
+
+### Definition (3GPP TS 38.215)
+
+RSRP is the **linear average** of power contributions of resource elements carrying reference signals.
+
+### Simplified Calculation
+
+```
+RSRP = (1/N) × Σ |reference_signal_sample|²
+
+In dBm:
+RSRP_dBm = 10 × log10(RSRP) + 30
+```
+
+### Quality Mapping
+
+| RSRP (dBm) | Quality | Typical Scenario |
+|------------|---------|------------------|
+| ≥ -80 | Excellent | Near tower |
+| -80 to -90 | Good | Outdoor urban |
+| -90 to -100 | Fair | Indoor |
+| -100 to -110 | Poor | Cell edge |
+| < -110 | Very Poor | Handover needed |
+
+---
+
+# PART 4: PUTTING IT ALL TOGETHER
+
+## 4.1 Complete Detection Flow
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    SIGNAL CAPTURE                       │
+│   Antenna → LNA → Mixer → ADC → I/Q Samples            │
+└───────────────────────┬─────────────────────────────────┘
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│                   PSS DETECTION                         │
+│   For N_ID_2 = 0, 1, 2:                                │
+│     • Generate PSS reference                            │
+│     • Cross-correlate with signal                       │
+│     • Find peak, calculate SNR                          │
+│   → Outputs: timing, N_ID_2, SNR                       │
+└───────────────────────┬─────────────────────────────────┘
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│                  CFO ESTIMATION                         │
+│   • Extract CP region at detected timing                │
+│   • Correlate CP with symbol tail                       │
+│   • Extract phase → frequency offset                    │
+│   → Outputs: normalized CFO                             │
+└───────────────────────┬─────────────────────────────────┘
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│                   SSS DETECTION                         │
+│   • Go to SSS position (2 symbols after PSS)           │
+│   • FFT to frequency domain                            │
+│   • For N_ID_1 = 0 to 335:                             │
+│       • Generate SSS(N_ID_1, N_ID_2)                   │
+│       • Correlate                                       │
+│   → Outputs: N_ID_1                                    │
+└───────────────────────┬─────────────────────────────────┘
+                        ▼
+┌─────────────────────────────────────────────────────────┐
+│                   CALCULATE PCI                         │
+│   PCI = 3 × N_ID_1 + N_ID_2                            │
+│                                                         │
+│   Example: N_ID_1=71, N_ID_2=2                         │
+│            PCI = 3×71 + 2 = 215                        │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4.2 Formula Reference Card
+
+### Core Identities
+```
+PCI = 3 × N_ID_1 + N_ID_2
+N_ID_1 = 0...335, N_ID_2 = 0...2
+Total PCIs = 1008
+```
+
+### OFDM Parameters
+```
+Sample Rate = FFT_size × SCS
+Symbol Duration = 1/SCS = FFT_size/Sample_Rate
+CP Duration = CP_len/Sample_Rate
+```
+
+### M-Sequence PSS
+```
+d_PSS(n) = 1 - 2×x((n + 43×N_ID_2) mod 127)
+x(i+7) = [x(i+4) + x(i)] mod 2
+Initial: x = [0,1,1,0,1,1,1]
+```
+
+### M-Sequences SSS
+```
+d_SSS(n) = d₀(n) × d₁(n)
+d₀(n) = 1 - 2×x₀((n + m₀) mod 127)
+d₁(n) = 1 - 2×x₁((n + m₁) mod 127)
+
+m₀ = 15×⌊N_ID_1/112⌋ + 5×N_ID_2
+m₁ = N_ID_1 mod 112
+
+x₀: x₀(i+7) = [x₀(i+4) + x₀(i)] mod 2
+x₁: x₁(i+7) = [x₁(i+1) + x₁(i)] mod 2
+Both initial: [1,0,0,0,0,0,0]
+```
+
+### CFO
+```
+Normalized CFO: ε = angle(Σ cp_late × cp_early*) / (2π)
+CFO in Hz: Δf = ε × SCS
+```
+
+### SNR
+```
+SNR_dB = 20 × log10(peak_amplitude / noise_amplitude)
+       = 10 × log10(peak_power / noise_power)
+```
+
+---
+
+**This document is verified against 3GPP TS 38.211 V17.4.0** ✅

@@ -1,4 +1,4 @@
-# 5G NR Cell Detection - Complete Theory Guide 📖
+# 5G NR Cell Detection
 ## Verified Against 3GPP TS 38.211 V17.4.0
 
 ---

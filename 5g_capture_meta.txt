@@ -1,0 +1,7 @@
+Capture Time: 2026-01-27 17:06:14.973931
+Sample Rate: 30720000.0 Hz (30.72 MHz)
+Center Freq: 3500000000.0 Hz (3.500 GHz)
+RX Gain: 40.0 dB
+Num Samples: 153600000
+Duration: 5.000 seconds
+File Size: 1228.8 MB

@@ -1,0 +1,6 @@
+# Large binary capture files (too big for GitHub)
+*.dat
+
+# Python
+__pycache__/
+*.pyc

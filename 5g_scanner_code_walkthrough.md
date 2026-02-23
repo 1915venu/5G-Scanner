@@ -1,6 +1,6 @@
 # 5G NR Cell Scanner — Code + Concepts: A Continuous Walkthrough
 
-> **Goal:** Walk through every meaningful piece of code, and explain the concept **right where the code lives** — not in a separate theory section. By the end, you'll understand both *what the code does* and *why it works*, in one unbroken story.
+>
 
 ---
 
